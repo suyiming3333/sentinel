@@ -20,7 +20,10 @@ import java.util.List;
 
 import com.alibaba.csp.sentinel.dashboard.auth.AuthAction;
 import com.alibaba.csp.sentinel.dashboard.auth.AuthService.PrivilegeType;
+import com.alibaba.csp.sentinel.dashboard.datasource.entity.rule.DegradeRuleEntity;
 import com.alibaba.csp.sentinel.dashboard.repository.rule.RuleRepository;
+import com.alibaba.csp.sentinel.dashboard.rule.DynamicRuleProvider;
+import com.alibaba.csp.sentinel.dashboard.rule.DynamicRulePublisher;
 import com.alibaba.csp.sentinel.util.StringUtil;
 
 import com.alibaba.csp.sentinel.dashboard.datasource.entity.rule.SystemRuleEntity;
@@ -31,6 +34,7 @@ import com.alibaba.csp.sentinel.dashboard.domain.Result;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
@@ -46,8 +50,15 @@ public class SystemController {
 
     @Autowired
     private RuleRepository<SystemRuleEntity, Long> repository;
+//    @Autowired
+//    private SentinelApiClient sentinelApiClient;
+
     @Autowired
-    private SentinelApiClient sentinelApiClient;
+    @Qualifier("systemRuleNacosProvider")
+    private DynamicRuleProvider<List<SystemRuleEntity>> ruleProvider;
+    @Autowired
+    @Qualifier("systemRuleNacosPublisher")
+    private DynamicRulePublisher<List<SystemRuleEntity>> rulePublisher;
 
     private <R> Result<R> checkBasicParams(String app, String ip, Integer port) {
         if (StringUtil.isEmpty(app)) {
@@ -74,7 +85,8 @@ public class SystemController {
             return checkResult;
         }
         try {
-            List<SystemRuleEntity> rules = sentinelApiClient.fetchSystemRuleOfMachine(app, ip, port);
+//            List<SystemRuleEntity> rules = sentinelApiClient.fetchSystemRuleOfMachine(app, ip, port);
+            List<SystemRuleEntity> rules = ruleProvider.getRules(app);
             rules = repository.saveAll(rules);
             return Result.ofSuccess(rules);
         } catch (Throwable throwable) {
@@ -97,7 +109,7 @@ public class SystemController {
     @AuthAction(PrivilegeType.WRITE_RULE)
     public Result<SystemRuleEntity> apiAdd(String app, String ip, Integer port,
                                            Double highestSystemLoad, Double highestCpuUsage, Long avgRt,
-                                           Long maxThread, Double qps) {
+                                           Long maxThread, Double qps) throws Exception {
 
         Result<SystemRuleEntity> checkResult = checkBasicParams(app, ip, port);
         if (checkResult != null) {
@@ -153,16 +165,17 @@ public class SystemController {
             logger.error("Add SystemRule error", throwable);
             return Result.ofThrowable(-1, throwable);
         }
-        if (!publishRules(app, ip, port)) {
-            logger.warn("Publish system rules fail after rule add");
-        }
+//        if (!publishRules(app, ip, port)) {
+//            logger.warn("Publish system rules fail after rule add");
+//        }
+        publishRules(entity.getApp(),entity.getIp(),entity.getPort());
         return Result.ofSuccess(entity);
     }
 
     @GetMapping("/save.json")
     @AuthAction(PrivilegeType.WRITE_RULE)
     public Result<SystemRuleEntity> apiUpdateIfNotNull(Long id, String app, Double highestSystemLoad,
-            Double highestCpuUsage, Long avgRt, Long maxThread, Double qps) {
+            Double highestCpuUsage, Long avgRt, Long maxThread, Double qps) throws Exception {
         if (id == null) {
             return Result.ofFail(-1, "id can't be null");
         }
@@ -215,15 +228,16 @@ public class SystemController {
             logger.error("save error:", throwable);
             return Result.ofThrowable(-1, throwable);
         }
-        if (!publishRules(entity.getApp(), entity.getIp(), entity.getPort())) {
-            logger.info("publish system rules fail after rule update");
-        }
+//        if (!publishRules(entity.getApp(), entity.getIp(), entity.getPort())) {
+//            logger.info("publish system rules fail after rule update");
+//        }
+        publishRules(entity.getApp(),entity.getIp(),entity.getPort());
         return Result.ofSuccess(entity);
     }
 
     @RequestMapping("/delete.json")
     @AuthAction(PrivilegeType.DELETE_RULE)
-    public Result<?> delete(Long id) {
+    public Result<?> delete(Long id) throws Exception {
         if (id == null) {
             return Result.ofFail(-1, "id can't be null");
         }
@@ -237,14 +251,16 @@ public class SystemController {
             logger.error("delete error:", throwable);
             return Result.ofThrowable(-1, throwable);
         }
-        if (!publishRules(oldEntity.getApp(), oldEntity.getIp(), oldEntity.getPort())) {
-            logger.info("publish system rules fail after rule delete");
-        }
+//        if (!publishRules(oldEntity.getApp(), oldEntity.getIp(), oldEntity.getPort())) {
+//            logger.info("publish system rules fail after rule delete");
+//        }
+        publishRules(oldEntity.getApp(),oldEntity.getIp(),oldEntity.getPort());
         return Result.ofSuccess(id);
     }
 
-    private boolean publishRules(String app, String ip, Integer port) {
+    private void publishRules(String app, String ip, Integer port) throws Exception {
         List<SystemRuleEntity> rules = repository.findAllByMachine(MachineInfo.of(app, ip, port));
-        return sentinelApiClient.setSystemRuleOfMachine(app, ip, port, rules);
+        rulePublisher.publish(app,rules);
+//        return sentinelApiClient.setSystemRuleOfMachine(app, ip, port, rules);
     }
 }
